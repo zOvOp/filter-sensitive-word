@@ -1,0 +1,18 @@
+# VitePress 文档站（仅 GitHub Pages 部署，不发布到 npm）
+docs/
+
+# 源码与构建配置
+src/
+tsconfig.json
+tsup.config.ts
+*.ts
+!dist/**/*.d.ts
+
+# CI / 开发
+.github/
+coverage/
+*.tgz
+
+# 环境
+.env
+.env.*

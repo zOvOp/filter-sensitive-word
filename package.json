@@ -1,0 +1,61 @@
+{
+  "name": "filter-sensitive-word",
+  "version": "1.1.0",
+  "description": "轻量级敏感词检测与过滤库",
+  "keywords": [
+    "sensitive",
+    "filter",
+    "censor",
+    "profanity",
+    "敏感词"
+  ],
+  "publishConfig": {
+  "registry": "https://registry.npmjs.org"
+},
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zOvOp/filter-sensitive-word.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zOvOp/filter-sensitive-word/issues"
+  },
+  "homepage": "https://zovop.github.io/filter-sensitive-word/",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "filter-sensitive-word": "^1.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3",
+    "vitepress": "^1.6.3",
+    "vue": "^3.5.13"
+  }
+}
