@@ -1,6 +1,6 @@
 # 在线体验
 
-下方演示通过 npm 包 **`filter-sensitive-word`** 在浏览器中运行（与生产环境引入方式一致）。
+下方演示在浏览器中实时运行，API 与 `npm install filter-sensitive-word` 后一致。
 
 <DfaPlayground />
 

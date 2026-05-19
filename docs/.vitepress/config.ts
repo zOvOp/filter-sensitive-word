@@ -1,8 +1,22 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
 
+const root = fileURLToPath(new URL("../..", import.meta.url));
+
 export default defineConfig({
-  lang: "zh-CN",
-  title: "filter-sensitive-word",
+  vite: {
+    resolve: {
+      alias: {
+        // 文档站引用本地源码，避免 CI 依赖 npm 包且未构建 dist 导致解析失败
+        "filter-sensitive-word": resolve(root, "src/index.ts"),
+      },
+    },
+    ssr: {
+      noExternal: ["filter-sensitive-word"],
+    },
+  },
+  lang: "zh-CN",  title: "filter-sensitive-word",
   description: "轻量级敏感词检测与过滤库，DFA 高性能匹配 + AI 语义检测",
   base: "/filter-sensitive-word/",
   head: [["link", { rel: "icon", href: "/filter-sensitive-word/logo.png" }]],
