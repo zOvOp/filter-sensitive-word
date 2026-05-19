@@ -101,7 +101,41 @@ export interface AIClientConfig {
  * ```
    */
   customFetch?: CustomFetch
+  /**
+   * 自定义 System Prompt
+   *
+   * 不传则使用 {@link DEFAULT_AI_SYSTEM_PROMPT}，并由 SDK 解析为 {@link AIDetectResult}。
+   * 传入自定义提示词时，`detect()` 将直接返回 LLM 接口原始响应，不再做 JSON 解析。
+   */
+  systemPrompt?: string
 }
+
+/** AI 检测默认 System Prompt */
+export const DEFAULT_AI_SYSTEM_PROMPT = `你是一个专业的内容合规与安全审核助手。请分析用户输入的文本，判断是否包含以下任意一类不合规或违规内容：
+
+1. politics（时政高风险）：涉及公众人物争议、敏感时事、不当体制评论等。
+2. ads（垃圾营销）：违规推广、引流、代购、非正规兼职、博彩类信息等。
+3. porn（成人与低俗）：不适宜未成年人阅读的成人向内容、低俗描写、非法交易暗示等。
+4. violence（高危与极端）：涉及人身伤害、极端危险行为、违禁物品制作说明等。
+5. cult（非法结社与迷信）：涉及非法组织、有害迷信、精神诱导等。
+6. abuse（不友善行为）：严重的人身攻击、恶意贬低、歧视性言论等。
+
+请严格按以下 JSON 格式返回，不要包含 markdown 标记或其他额外文字：
+{
+  "isSensitive": true或false,
+  "categories": ["命中的分类1", "命中的分类2"],
+  "matchedWords": '"命中的具体词汇1", "命中的具体词汇2"',
+  "riskLevel": "low"或"medium"或"high",
+  "reason": "简要判断理由，中文",
+  "confidence": 0到1之间的数值
+}
+
+风险等级说明：
+- high：明确包含违规内容，无需上下文即可判定
+- medium：包含可疑内容，需要结合上下文综合判断
+- low：基本安全或仅有轻微擦边
+
+如果内容完全合规，categories 为空数组，matchedWords 为空字符串，riskLevel 为 "low"，confidence 为 1。`
 
 /**
  * AI 敏感词检测器内部配置（apiKey 允许为空，仅在 direct 模式下使用）
@@ -113,6 +147,9 @@ interface InternalConfig {
   timeout: number
   temperature: number
   customFetch: CustomFetch | null
+  systemPrompt: string
+  /** 用户是否传入了自定义 systemPrompt */
+  customSystemPrompt: boolean
 }
 
 /**
@@ -188,6 +225,8 @@ export class AISensitiveWordDetector {
       timeout: config.timeout ?? 15000,
       temperature: config.temperature ?? 0,
       customFetch: config.customFetch ?? null,
+      systemPrompt: config.systemPrompt ?? DEFAULT_AI_SYSTEM_PROMPT,
+      customSystemPrompt: config.systemPrompt !== undefined,
     }
   }
 
@@ -195,8 +234,9 @@ export class AISensitiveWordDetector {
    * 检测文本中是否包含敏感内容
    *
    * @param text - 待检测的文本，建议不超过 2000 字以获得最佳效果
-   * @returns AI 检测结果
-   * @throws 网络错误、API 返回错误、或 JSON 解析失败时抛出异常
+   * @returns 未配置自定义 `systemPrompt` 时为 {@link AIDetectResult}；
+   *          配置了自定义 `systemPrompt` 时为 LLM 接口原始响应（代理模式为 `customFetch` 返回值，直连模式为 Chat Completions 完整 JSON）
+   * @throws 网络错误、API 返回错误、或（默认提示词下）JSON 解析失败时抛出异常
    *
    * @example
    * ```ts
@@ -207,7 +247,7 @@ export class AISensitiveWordDetector {
    * }
    * ```
    */
-  async detect(text: string): Promise<AIDetectResult> {
+  async detect(text: string): Promise<AIDetectResult | unknown> {
     if (!text) {
       return {
         isSensitive: false,
@@ -220,20 +260,27 @@ export class AISensitiveWordDetector {
     }
 
     const messages = [
-      { role: 'system', content: this.buildSystemPrompt() },
+      { role: 'system', content: this.config.systemPrompt },
       { role: 'user', content: text },
     ]
 
+    // 自定义提示词：直接返回接口原始内容，由调用方自行解析
+    if (this.config.customSystemPrompt) {
+      if (this.config.customFetch) {
+        return await this.config.customFetch.fetch(messages)
+      }
+      return await this.directRequest(messages)
+    }
+
     // 代理模式：通过 customFetch.fetch 委托后端转发 LLM 请求
-    // SDK 已组装好 messages（含 system prompt），后端直接转发即可
     if (this.config.customFetch) {
       const data = await this.config.customFetch.fetch(messages)
       return this.parseResponse(this.resolveLLMContent(data))
     }
 
     // 直连模式：SDK 直接调用 LLM API
-    const response = await this.directRequest(messages)
-    return this.parseResponse(response)
+    const data = await this.directRequest(messages)
+    return this.parseResponse(this.resolveLLMContent(data))
   }
 
   /** 从 LLM 原始 JSON 或 content 字符串中取出正文 */
@@ -250,41 +297,9 @@ export class AISensitiveWordDetector {
   }
 
   /**
-   * 构建系统提示词
-   * 指导大模型按照指定格式输出敏感词检测结果
+   * 直连模式：直接向 LLM API 发起 HTTP 请求，返回 Chat Completions 完整 JSON
    */
-  private buildSystemPrompt(): string {
-    return `你是一个专业的内容审核助手。请分析用户输入的文本，判断是否包含以下任意一类敏感内容：
-
-1. politics（政治敏感）：涉及政治人物、政治事件、体制攻击等
-2. ads（广告）：推广营销、引流、代购、兼职招聘、赌博彩票等
-3. porn（色情）：性暗示、色情描写、低俗内容、招嫖信息等
-4. violence（暴恐）：暴力、恐怖主义、极端主义、武器制作等
-5. cult（邪教）：邪教组织、封建迷信、精神控制、末日预言等
-6. abuse（辱骂）：人身攻击、侮辱谩骂、诅咒、歧视等
-
-请严格按以下 JSON 格式返回，不要包含 markdown 标记或其他额外文字：
-{
-  "isSensitive": true或false,
-  "categories": ["命中的分类1", "命中的分类2"],
-  "matchedWords": ["命中的具体词汇1", "命中的具体词汇2"],
-  "riskLevel": "low"或"medium"或"high",
-  "reason": "简要判断理由，中文",
-  "confidence": 0到1之间的数值
-}
-
-风险等级说明：
-- high：明确包含敏感内容，无需上下文即可判定
-- medium：包含可疑内容，需要结合上下文综合判断
-- low：基本安全或仅有轻微擦边
-
-如果内容完全安全不包含任何敏感内容，categories 和 matchedWords 为空数组，riskLevel 为 "low"，confidence 为 1。`
-  }
-
-  /**
-   * 直连模式：直接向 LLM API 发起 HTTP 请求
-   */
-  private async directRequest(messages: Array<{ role: string; content: string }>): Promise<string> {
+  private async directRequest(messages: Array<{ role: string; content: string }>): Promise<unknown> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.config.timeout)
 
@@ -299,7 +314,6 @@ export class AISensitiveWordDetector {
           model: this.config.model,
           messages,
           temperature: this.config.temperature,
-          max_tokens: 500,
         }),
         signal: controller.signal,
       })
@@ -313,15 +327,16 @@ export class AISensitiveWordDetector {
         )
       }
 
-      const data: any = await res.json()
-      const content = data?.choices?.[0]?.message?.content
+      const data: unknown = await res.json()
+      const content = (data as { choices?: Array<{ message?: { content?: string } }> })
+        ?.choices?.[0]?.message?.content
       if (!content) {
         throw new Error(
           `[AISensitiveWordDetector] API 返回数据格式异常: ${JSON.stringify(data)}`
         )
       }
 
-      return content
+      return data
     } catch (err: any) {
       clearTimeout(timer)
       if (err.name === 'AbortError') {
@@ -329,6 +344,26 @@ export class AISensitiveWordDetector {
       }
       throw err
     }
+  }
+
+  /**
+   * 将 AI 返回的 matchedWords 规范化为字符串数组
+   *
+   * 提示词要求模型返回逗号分隔的引号字符串（合规时为空字符串），
+   * 同时兼容历史数组格式。
+   */
+  private normalizeMatchedWords(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.map(String).filter(Boolean)
+    }
+    if (typeof value !== 'string' || !value.trim()) {
+      return []
+    }
+    const quoted = [...value.matchAll(/"([^"]*)"/g)]
+      .map((m) => m[1])
+      .filter(Boolean)
+    if (quoted.length > 0) return quoted
+    return value.split(',').map((s) => s.trim()).filter(Boolean)
   }
 
   /**
@@ -369,9 +404,7 @@ export class AISensitiveWordDetector {
       categories: Array.isArray(parsed.categories)
         ? parsed.categories.filter((c: string) => validCategories.includes(c))
         : [],
-      matchedWords: Array.isArray(parsed.matchedWords)
-        ? parsed.matchedWords.map(String)
-        : [],
+      matchedWords: this.normalizeMatchedWords(parsed.matchedWords),
       riskLevel: validRiskLevels.includes(parsed.riskLevel)
         ? parsed.riskLevel
         : 'low',

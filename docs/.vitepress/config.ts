@@ -26,6 +26,7 @@ export default defineConfig({
       { text: "指南", link: "/guide/getting-started" },
       { text: "DFA API", link: "/guide/api" },
       { text: "AI 检测", link: "/guide/ai" },
+      { text: "常见问题", link: "/guide/faq" },
       {
         text: "npm",
         link: "https://www.npmjs.com/package/filter-sensitive-word",
@@ -45,6 +46,7 @@ export default defineConfig({
           { text: "DFA API", link: "/guide/api" },
           { text: "AI 大模型检测", link: "/guide/ai" },
           { text: "工作原理", link: "/guide/how-it-works" },
+          { text: "常见问题", link: "/guide/faq" },
         ],
       },
     ],

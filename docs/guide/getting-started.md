@@ -60,10 +60,11 @@ const ai = new AISensitiveWordDetector({
 });
 
 const result = await ai.detect("待检测文本");
+// 默认提示词下 result 为 AIDetectResult
 console.log(result.isSensitive, result.categories, result.riskLevel);
 ```
 
-详见 [AI 大模型检测](/guide/ai)。
+传入自定义 `systemPrompt` 时，`detect()` 返回 LLM 原始接口数据，不再解析为 `AIDetectResult`。详见 [AI 大模型检测](/guide/ai)。
 
 ## 下一步
 

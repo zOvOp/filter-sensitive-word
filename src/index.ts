@@ -6,7 +6,7 @@ import violenceWords from './words/violence'
 import cultWords from './words/cult'
 import abuseWords from './words/abuse'
 
-export { AISensitiveWordDetector } from './ai'
+export { AISensitiveWordDetector, DEFAULT_AI_SYSTEM_PROMPT } from './ai'
 export type { AIDetectResult, AIClientConfig, CustomFetch } from './ai'
 
 /** 默认干扰词字符集，包含空白字符、标点符号、特殊符号等 */

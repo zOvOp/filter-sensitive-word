@@ -229,31 +229,39 @@ console.log(result.confidence); // 0.95
 
 创建 AI 检测器实例。
 
-| 参数          | 类型                                       | 默认值                      | 说明                                 |
-| ------------- | ------------------------------------------ | --------------------------- | ------------------------------------ |
-| `apiKey`      | `string`                                   | —                           | API Key，使用 `customFetch` 时可省略 |
-| `baseURL`     | `string`                                   | `https://api.openai.com/v1` | API 基础地址                         |
-| `model`       | `string`                                   | `gpt-3.5-turbo`             | 模型名称                             |
-| `timeout`     | `number`                                   | `15000`                     | 请求超时（毫秒）                     |
-| `temperature` | `number`                                   | `0`                         | 模型温度参数                         |
-| `customFetch` | `{ fetch: (messages) => Promise<unknown> }` | —                           | 自定义远程请求配置，**前端推荐使用** |
+| 参数           | 类型                                        | 默认值                      | 说明                                 |
+| -------------- | ------------------------------------------- | --------------------------- | ------------------------------------ |
+| `apiKey`       | `string`                                    | —                           | API Key，使用 `customFetch` 时可省略 |
+| `baseURL`      | `string`                                    | `https://api.openai.com/v1` | API 基础地址                         |
+| `model`        | `string`                                    | `gpt-3.5-turbo`             | 模型名称                             |
+| `timeout`      | `number`                                    | `15000`                     | 请求超时（毫秒）                     |
+| `temperature`  | `number`                                    | `0`                         | 模型温度参数                         |
+| `customFetch`  | `{ fetch: (messages) => Promise<unknown> }` | —                           | 自定义远程请求配置，**前端推荐使用** |
+| `systemPrompt` | `string`                                    | 内置默认提示词              | 自定义 System Prompt；传入后 `detect()` 返回原始接口数据，不做 JSON 解析 |
 
 #### `customFetch.fetch(messages)` 入参
 
-| 参数 | 类型 | 说明 |
-| --- | --- | --- |
+| 参数       | 类型                                       | 说明                                                                 |
+| ---------- | ------------------------------------------ | -------------------------------------------------------------------- |
 | `messages` | `Array<{ role: string; content: string }>` | SDK 已组装：`system`（审核 prompt）+ `user`（`detect(text)` 的文本） |
 
-**返回值**：`Promise<unknown>` — LLM 原始 JSON（如 OpenAI 完整响应），或 `choices[0].message.content` 字符串。
+**返回值**：`Promise<unknown>`
+
+- 默认提示词：支持 LLM 原始 JSON 或 `content` 字符串，SDK 解析为 `AIDetectResult`
+- 自定义 `systemPrompt`：`detect()` 直接返回 `fetch` 的原始值，不再解析
 
 ### `ai.detect(text)`
 
-调用 AI 大模型检测文本中的敏感内容，返回结构化结果。
+调用 AI 大模型检测文本中的敏感内容。
 
 - **text** `string` — 待检测的文本，建议不超过 2000 字
-- **返回** `Promise<AIDetectResult>`
+- **返回**
+  - 未传 `systemPrompt`：`Promise<AIDetectResult>`（SDK 自动解析）
+  - 传入自定义 `systemPrompt`：`Promise<unknown>`（直连为 Chat Completions 完整 JSON；代理为 `customFetch` 返回值）
 
 ### `AIDetectResult` 结构
+
+仅在**未传自定义 `systemPrompt`** 时，`detect()` 返回此结构。
 
 | 字段           | 类型                          | 说明                  |
 | -------------- | ----------------------------- | --------------------- |
@@ -275,6 +283,30 @@ const ai = new AISensitiveWordDetector({
 });
 
 const result = await ai.detect("用户输入的内容");
+```
+
+**自定义提示词（规避 API 输入端 400）：**
+
+传入 `systemPrompt` 后，`detect()` **不再**解析为 `AIDetectResult`，而是直接返回 LLM 接口原始响应，由调用方自行处理。
+
+```ts
+import {
+  AISensitiveWordDetector,
+  DEFAULT_AI_SYSTEM_PROMPT,
+} from "filter-sensitive-word";
+
+const ai = new AISensitiveWordDetector({
+  apiKey: "sk-xxx",
+  // 使用更温和的表述，避免触发厂商输入端安全拦截
+  systemPrompt: "你是内容审核助手，判断用户文本是否违规，简要说明理由即可。",
+});
+
+const raw = await ai.detect("用户输入的内容");
+const content = (raw as { choices?: Array<{ message?: { content?: string } }> })
+  ?.choices?.[0]?.message?.content;
+
+// 需要 AIDetectResult 时：不传 systemPrompt，使用默认提示词（SDK 自动解析）
+// 或基于 DEFAULT_AI_SYSTEM_PROMPT 自行改写后，在业务侧解析 content / raw
 ```
 
 **代理模式（前端，推荐）：**
@@ -387,6 +419,18 @@ async function doubleCheck(text: string) {
   return { method: "dfa", isSensitive: true, words: dfa.findAll(text) };
 }
 ```
+
+## 常见问题
+
+### AI 检测报 400 错误是什么原因？
+
+通过 API Key 调用大模型时若出现 `API 请求失败 (400)`，**通常不是本库的错误**，而是 API 提供商在输入端的安全策略拦截了请求。
+
+**核心原因：** 本库默认 System Prompt 中和 待检测消息 中列举了色情、暴力、邪教、辱骂等多类高风险敏感词示例。API 的安全过滤器无法区分「审核这些内容」与「生成这些内容」，会在第一层判定输入违反安全政策，直接返回 400（常见 `content_policy_violation` 等提示）。
+
+**解决方式：** 通过配置项 `systemPrompt` 传入更温和的提示词（可参考导出的 `DEFAULT_AI_SYSTEM_PROMPT` 自行改写），避免在 system 消息中直接罗列大段高风险原文。配置后 `detect()` 返回 LLM 原始响应，需自行解析，详见上文「自定义提示词」。
+
+详见文档：[常见问题 · AI 400](https://zovop.github.io/filter-sensitive-word/guide/faq.html#ai-检测报-400-错误是什么原因)
 
 ## 工作原理
 
