@@ -50,6 +50,14 @@ filter.findAll("兼*职"); // ['兼职']
 
 运行时追加词库。
 
+### `removeWords(words)`
+
+运行时移除词库中的词。只取消这些词的结尾标记：更长的词，以及已经单独入库的更短前缀，都会保留。
+
+```ts
+filter.removeWords(["旧词汇"]);
+```
+
 ### `setNoiseWords(noiseWords)`
 
 动态设置干扰词字符集。

@@ -12,7 +12,7 @@
 - **按需分类**：内置六大类敏感词库，可按需启用指定分类
 - **最长匹配**：过滤替换时采用最长匹配优先策略，区间合并避免字符叠加
 - **AI 大模型检测**：支持接入大语言模型，利用语义理解识别隐晦表达、变体写法
-- **可扩展**：支持自定义词库、自定义干扰词、运行时动态添加词汇
+- **可扩展**：支持自定义词库、自定义干扰词，以及运行时 `addWords` / `removeWords`
 - **TypeScript**：完整的类型定义，开箱即用
 - **双格式**：同时输出 ESM 和 CJS，兼容各种运行环境
 
@@ -21,6 +21,10 @@
 ```bash
 npm install filter-sensitive-word
 ```
+
+## 体积
+
+无运行时依赖。发布到 npm 的文件只有 `dist`、`README.md` 和 `LICENSE`（见 `package.json` 的 `files`）。当前 `npm pack --dry-run` 的结果是压缩包 91.7 kB、解压后 320.0 kB（含 ESM、CJS、类型声明和 sourcemap）。词库或说明变更后，以重新打包的结果为准。
 
 ## 快速开始
 
@@ -117,6 +121,17 @@ filter.findAll("这是一段正常文本"); // []
 
 ```ts
 filter.addWords(["新敏感词1", "新敏感词2"]);
+```
+
+---
+
+### `filter.removeWords(words)`
+
+从词库移除敏感词。只去掉这些词本身：更长的词，以及已经单独入库的更短前缀，都会保留。词不在库中时没有任何效果。
+
+```ts
+filter.removeWords(["新敏感词1"]);
+filter.hasSensitive("新敏感词1"); // false
 ```
 
 ---
@@ -465,6 +480,26 @@ async function doubleCheck(text: string) {
       ↑─────↑ 匹配 "兼职广告"（4字）← 选择此结果
 ```
 
+## 开发
+
+```bash
+npm install
+npm test
+npm run typecheck
+npm run build
+npm run docs:dev
+```
+
+`npm test` 使用 Node.js 自带测试运行器，覆盖 `hasSensitive`、`filter`、`findAll`、干扰词、最长匹配和 `addWords` / `removeWords`。
+
+## 仓库 Topics
+
+文档站点：[https://zovop.github.io/filter-sensitive-word/](https://zovop.github.io/filter-sensitive-word/)
+
+GitHub 仓库的 topics 目前为空。当前环境的 GitHub 凭证是只读的，不能通过 API 写入仓库设置。请在仓库 **About → Topics** 中手动添加，并把 **Website** 设为上面的文档地址：
+
+`sensitive-word` `word-filter` `text-filter` `content-moderation` `profanity-filter` `dfa` `trie` `typescript` `chinese` `npm-package`
+
 ## License
 
-MIT
+MIT © zOvOp

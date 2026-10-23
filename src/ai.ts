@@ -120,14 +120,17 @@ export const DEFAULT_AI_SYSTEM_PROMPT = `你是一个专业的内容合规与安
 5. cult（非法结社与迷信）：涉及非法组织、有害迷信、精神诱导等。
 6. abuse（不友善行为）：严重的人身攻击、恶意贬低、歧视性言论等。
 
-请严格按以下 JSON 格式返回，不要包含 markdown 标记或其他额外文字：
+请严格按以下 JSON 格式返回，不要包含 markdown 标记或其他额外文字。
+isSensitive 为布尔值；categories 只能从 politics、ads、porn、violence、cult、abuse 中选择，可多选；matchedWords 必须是字符串数组；riskLevel 只能是 "low"、"medium" 或 "high"；confidence 为 0 到 1 之间的数值。
+
+命中示例：
 {
-  "isSensitive": true或false,
-  "categories": ["命中的分类1", "命中的分类2"],
-  "matchedWords": '"命中的具体词汇1", "命中的具体词汇2"',
-  "riskLevel": "low"或"medium"或"high",
+  "isSensitive": true,
+  "categories": ["ads", "abuse"],
+  "matchedWords": ["命中的具体词汇1", "命中的具体词汇2"],
+  "riskLevel": "medium",
   "reason": "简要判断理由，中文",
-  "confidence": 0到1之间的数值
+  "confidence": 0.9
 }
 
 风险等级说明：
@@ -135,7 +138,15 @@ export const DEFAULT_AI_SYSTEM_PROMPT = `你是一个专业的内容合规与安
 - medium：包含可疑内容，需要结合上下文综合判断
 - low：基本安全或仅有轻微擦边
 
-如果内容完全合规，categories 为空数组，matchedWords 为空字符串，riskLevel 为 "low"，confidence 为 1。`
+如果内容完全合规，categories 与 matchedWords 均为空数组，riskLevel 为 "low"，confidence 为 1：
+{
+  "isSensitive": false,
+  "categories": [],
+  "matchedWords": [],
+  "riskLevel": "low",
+  "reason": "内容合规",
+  "confidence": 1
+}`
 
 /**
  * AI 敏感词检测器内部配置（apiKey 允许为空，仅在 direct 模式下使用）
@@ -349,8 +360,8 @@ export class AISensitiveWordDetector {
   /**
    * 将 AI 返回的 matchedWords 规范化为字符串数组
    *
-   * 提示词要求模型返回逗号分隔的引号字符串（合规时为空字符串），
-   * 同时兼容历史数组格式。
+   * 默认提示词要求 JSON 字符串数组（合规时为 []）。
+   * 仍兼容历史输出：逗号分隔字符串，或整段被引号包住的词列表。
    */
   private normalizeMatchedWords(value: unknown): string[] {
     if (Array.isArray(value)) {

@@ -34,7 +34,7 @@ features:
     details: 兼容 OpenAI Chat Completions；默认提示词自动解析为结构化结果，自定义 systemPrompt 则返回原始接口数据
   - icon: 🔧
     title: 可扩展
-    details: 自定义词库、干扰词、运行时 addWords，支持 ESM / CJS 双格式
+    details: 自定义词库、干扰词、运行时 addWords / removeWords，支持 ESM / CJS 双格式
   - icon: 📘
     title: TypeScript
     details: 完整类型定义，Node.js 与主流打包工具均可直接使用
