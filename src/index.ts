@@ -159,6 +159,26 @@ export class FilterSensitiveWord {
   }
 
   /**
+   * 从词库中移除敏感词
+   *
+   * 只取消被移除词本身的结束标记。更长的词、以及作为前缀单独入库的更短词都会保留。
+   * 词不在库中时不做任何事。
+   *
+   * @param words - 要移除的敏感词数组
+   *
+   * @example
+   * ```ts
+   * filter.removeWords(['旧词汇'])
+   * ```
+   */
+  removeWords(words: string[]): void {
+    for (const word of words) {
+      if (!word) continue
+      this.remove(word)
+    }
+  }
+
+  /**
    * 设置干扰词字符集
    *
    * 干扰词是指在敏感词匹配过程中会被自动跳过忽略的字符，
@@ -333,6 +353,31 @@ export class FilterSensitiveWord {
       node = node.children.get(char)!
     }
     node.isEnd = true // 标记单词结束
+  }
+
+  /**
+   * 从 Trie 树中删除一个敏感词（内部方法）
+   * 删除后若节点不再是词尾且没有子节点，则向上剪枝。
+   */
+  private remove(word: string): void {
+    const chars = [...word.toLowerCase()]
+    const path: TrieNode[] = [this.root]
+
+    for (const char of chars) {
+      const next = path[path.length - 1].children.get(char)
+      if (!next) return
+      path.push(next)
+    }
+
+    const end = path[path.length - 1]
+    if (!end.isEnd) return
+    end.isEnd = false
+
+    for (let i = path.length - 1; i > 0; i--) {
+      const node = path[i]
+      if (node.isEnd || node.children.size > 0) break
+      path[i - 1].children.delete(chars[i - 1])
+    }
   }
 
   /**

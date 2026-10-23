@@ -4,16 +4,25 @@
   "description": "轻量级敏感词检测与过滤库",
   "keywords": [
     "sensitive",
+    "sensitive-word",
     "filter",
+    "word-filter",
+    "text-filter",
     "censor",
     "profanity",
-    "敏感词"
+    "profanity-filter",
+    "content-moderation",
+    "dfa",
+    "trie",
+    "chinese",
+    "敏感词",
+    "敏感词过滤"
   ],
   "publishConfig": {
-  "registry": "https://registry.npmjs.org"
-},
+    "registry": "https://registry.npmjs.org"
+  },
   "license": "MIT",
-  "author": "",
+  "author": "zOvOp <2537314409@qq.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zOvOp/filter-sensitive-word.git"
@@ -46,13 +55,16 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "prepublishOnly": "npm run build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "node --import tsx --test test/*.test.ts",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "@types/node": "^20.19.43",
     "tsup": "^8.4.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vitepress": "^1.6.3",
     "vue": "^3.5.13"
