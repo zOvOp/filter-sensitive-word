@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | `words` | `string[]` | `[]` | 自定义追加敏感词 |
 | `useDefaultWords` | `boolean` | `true` | 是否启用内置词库 |
-| `detectTypes` | `DetectType[]` | 全部六类 | 启用的分类 |
+| `detectTypes` | `DetectType[]` | 全部六类 | 不传则全部启用；`[]` 不加载内置分类 |
 | `noiseWords` | `string` | 内置集 | 干扰词字符集 |
 
 ```ts
@@ -34,7 +34,7 @@ filter.hasSensitive("兼  职"); // true
 替换敏感词，默认 `*`。最长匹配优先，区间自动合并。
 
 ```ts
-filter.filter("这是兼职广告"); // '这是****'
+filter.filter("这是兼职广告"); // '这是**广告'
 filter.filter("敏感词", "#"); // '###'
 ```
 
@@ -48,7 +48,7 @@ filter.findAll("兼*职"); // ['兼职']
 
 ### `addWords(words)`
 
-运行时追加词库。
+运行时追加词库。词中的干扰字符会被去掉；去掉后不足两个有效字符的词不会入库，以免变成单字。不含干扰字符的单字会保留。
 
 ### `removeWords(words)`
 
@@ -60,7 +60,7 @@ filter.removeWords(["旧词汇"]);
 
 ### `setNoiseWords(noiseWords)`
 
-动态设置干扰词字符集。
+动态设置干扰词字符集，并按新字符集重建已添加的词。
 
 ## 导出词库
 

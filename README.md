@@ -4,6 +4,27 @@
 
 📖 **文档站点**：[https://zovop.github.io/filter-sensitive-word/](https://zovop.github.io/filter-sensitive-word/)（VitePress，本地开发：`npm run docs:dev`）
 
+## English
+
+Lightweight sensitive-word filter for Node.js and bundlers. Matching is a case-insensitive DFA trie that skips noise characters (spaces, punctuation, symbols). An optional OpenAI-compatible chat client covers paraphrases. There are no runtime dependencies. The rest of this README is in Chinese; the same documentation is published at [https://zovop.github.io/filter-sensitive-word/](https://zovop.github.io/filter-sensitive-word/).
+
+```bash
+npm install filter-sensitive-word
+```
+
+```ts
+import { FilterSensitiveWord } from "filter-sensitive-word";
+
+const filter = new FilterSensitiveWord();
+filter.hasSensitive("这是兼职广告"); // true
+filter.filter("这是兼职广告"); // "这是**广告"
+filter.findAll("兼 职"); // ["兼职"]
+```
+
+Built-in categories are `politics`, `ads`, `porn`, `violence`, `cult`, and `abuse`. Omit `detectTypes` to load all of them, or pass `[]` to load none. `engines` is Node.js 16 or newer. Direct AI requests need global `fetch` (Node.js 18+); the trie filter does not.
+
+Suggested GitHub topics are listed under [仓库 Topics](#仓库-topics). npm keywords live in `package.json`.
+
 ## 特性
 
 - **高性能**：基于 DFA（Trie 树）实现 O(n) 时间复杂度的匹配
@@ -24,7 +45,7 @@ npm install filter-sensitive-word
 
 ## 体积
 
-无运行时依赖。发布到 npm 的文件只有 `dist`、`README.md` 和 `LICENSE`（见 `package.json` 的 `files`）。当前 `npm pack --dry-run` 的结果是压缩包 91.7 kB、解压后 320.0 kB（含 ESM、CJS、类型声明和 sourcemap）。词库或说明变更后，以重新打包的结果为准。
+无运行时依赖。发布到 npm 的文件只有 `dist`、`README.md` 和 `LICENSE`（见 `package.json` 的 `files`）。1.3.1 的 `npm pack --dry-run` 是压缩包 51.2 kB、解压后 166.2 kB（ESM、CJS 和一份类型声明，不含 sourcemap）。1.3.0 同口径是 91.7 kB / 320.0 kB，多出来的主要是两份 sourcemap。词库或说明变更后，以重新打包的结果为准。
 
 ## 快速开始
 
@@ -37,8 +58,8 @@ const filter = new FilterSensitiveWord();
 filter.hasSensitive("这是正常文本"); // false
 filter.hasSensitive("这是兼职广告"); // true
 
-filter.filter("这是兼职广告"); // '这是****'
-filter.findAll("兼 职 广 告"); // ['兼职', '广告']
+filter.filter("这是兼职广告"); // '这是**广告'
+filter.findAll("兼 职 广 告"); // ['兼职']
 ```
 
 ## API
@@ -53,7 +74,7 @@ filter.findAll("兼 职 广 告"); // ['兼职', '广告']
 | ----------------- | -------------- | ------------ | ------------------------------------------ |
 | `words`           | `string[]`     | `[]`         | 用户自定义追加的敏感词列表                 |
 | `useDefaultWords` | `boolean`      | `true`       | 是否启用内置默认词库                       |
-| `detectTypes`     | `DetectType[]` | 全部六类     | 启用默认词库时，指定要检测的分类           |
+| `detectTypes`     | `DetectType[]` | 全部六类     | 不传则启用全部内置分类；`[]` 表示一个都不加载 |
 | `noiseWords`      | `string`       | 内置干扰词集 | 自定义干扰词字符集，每个字符视为一个干扰词 |
 
 #### DetectType
@@ -82,7 +103,7 @@ filter.hasSensitive("这是正常文本"); // false
 filter.hasSensitive("这是兼职广告"); // true
 filter.hasSensitive("兼  职"); // true — 空格作为干扰词被跳过
 filter.hasSensitive("兼***职"); // true — * 作为干扰词被跳过
-filter.hasSensitive("JianZhi"); // true — 忽略大小写（取决于词库）
+filter.hasSensitive("傻B"); // true — 与词库中的「傻b」忽略大小写
 ```
 
 ---
@@ -95,10 +116,10 @@ filter.hasSensitive("JianZhi"); // true — 忽略大小写（取决于词库）
 - **replacement** `string` — 替换字符，默认 `'*'`
 
 ```ts
-filter.filter("这是兼职广告"); // '这是****'
-filter.filter("敏感词123", "#"); // '###123'
+filter.filter("这是兼职广告"); // '这是**广告'
+filter.filter("兼职123", "#"); // '##123'
 filter.filter("兼 职", "*"); // '***' — 干扰词也被替换
-filter.filter("AB兼职CD广告EF"); // 'AB****CD****EF'
+filter.filter("AB兼职CD广告EF"); // 'AB**CD广告EF'
 ```
 
 ---
@@ -108,7 +129,7 @@ filter.filter("AB兼职CD广告EF"); // 'AB****CD****EF'
 查找文本中所有匹配的敏感词，返回去干扰词后的纯净结果。
 
 ```ts
-filter.findAll("这是兼职广告"); // ['兼职', '广告']
+filter.findAll("这是兼职广告"); // ['兼职']
 filter.findAll("兼*职"); // ['兼职']
 filter.findAll("这是一段正常文本"); // []
 ```
@@ -127,7 +148,9 @@ filter.addWords(["新敏感词1", "新敏感词2"]);
 
 ### `filter.removeWords(words)`
 
-从词库移除敏感词。只去掉这些词本身：更长的词，以及已经单独入库的更短前缀，都会保留。词不在库中时没有任何效果。
+从词库移除敏感词。只去掉这些词本身：更长的词，以及已经单独入库的更短前缀，都会保留。词不在库中时没有任何效果。比较时忽略大小写。
+
+添加词时会去掉干扰字符。去掉之后如果还剩至少两个有效字符，就按这些字符入库，所以「转 让」和「转让」是同一个词。如果只剩一个有效字符（例如用符号挡住了第二个字），这个词不会入库，避免退化成单字误伤。词本身就是一个字、且不含干扰字符时会保留。`setNoiseWords` 会按新的干扰词集合重建已添加的词。
 
 ```ts
 filter.removeWords(["新敏感词1"]);
@@ -491,6 +514,8 @@ npm run docs:dev
 ```
 
 `npm test` 使用 Node.js 自带测试运行器，覆盖 `hasSensitive`、`filter`、`findAll`、干扰词、最长匹配和 `addWords` / `removeWords`。
+
+`package.json` 的 `engines` 是 `node >= 16`，DFA 过滤不依赖网络。AI 直连使用全局 `fetch`，需要 Node.js 18 及以上，或由 `customFetch` 代理。发布包不包含 sourcemap，调试请直接看仓库里的 `src/`。
 
 ## 仓库 Topics
 

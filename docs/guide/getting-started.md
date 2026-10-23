@@ -28,8 +28,8 @@ const filter = new FilterSensitiveWord();
 filter.hasSensitive("这是正常文本"); // false
 filter.hasSensitive("这是兼职广告"); // true
 
-filter.filter("这是兼职广告"); // '这是****'
-filter.findAll("兼 职 广 告"); // ['兼职', '广告']
+filter.filter("这是兼职广告"); // '这是**广告'
+filter.findAll("兼 职 广 告"); // ['兼职']
 ```
 
 ### 按分类启用词库

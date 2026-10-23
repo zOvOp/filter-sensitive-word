@@ -53,7 +53,7 @@ import { FilterSensitiveWord } from "filter-sensitive-word";
 
 const filter = new FilterSensitiveWord();
 filter.hasSensitive("这是兼职广告"); // true
-filter.filter("这是兼职广告"); // '这是****'
+filter.filter("这是兼职广告"); // '这是**广告'
 ```
 
 <DfaPlayground />
