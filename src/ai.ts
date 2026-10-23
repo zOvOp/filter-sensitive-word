@@ -93,12 +93,12 @@ export interface AIClientConfig {
    *         headers: { 'Content-Type': 'application/json' },
    *         body: JSON.stringify({ messages }),
    *       })
- *       const data = await res.json()
- *       return data
- *     },
- *   },
- * })
- * ```
+   *       const data = await res.json()
+   *       return data
+   *     },
+   *   },
+   * })
+   * ```
    */
   customFetch?: CustomFetch
   /**
@@ -231,7 +231,7 @@ export class AISensitiveWordDetector {
 
     this.config = {
       apiKey: config.apiKey ?? '',
-      baseURL: config.baseURL ?? 'https://api.openai.com/v1',
+      baseURL: (config.baseURL ?? 'https://api.openai.com/v1').trim().replace(/\/+$/, ''),
       model: config.model ?? 'gpt-3.5-turbo',
       timeout: config.timeout ?? 15000,
       temperature: config.temperature ?? 0,
@@ -294,17 +294,33 @@ export class AISensitiveWordDetector {
     return this.parseResponse(this.resolveLLMContent(data))
   }
 
-  /** 从 LLM 原始 JSON 或 content 字符串中取出正文 */
+  /** 从 LLM 原始 JSON、content 字符串，或分段 content 数组中取出正文 */
   private resolveLLMContent(data: unknown): string {
     if (typeof data === 'string') return data
-    const content = (data as { choices?: Array<{ message?: { content?: string } }> })
+    const content = (data as { choices?: Array<{ message?: { content?: unknown } }> })
       ?.choices?.[0]?.message?.content
-    if (!content) {
+    const text = this.contentToText(content)
+    if (!text) {
       throw new Error(
         '[AISensitiveWordDetector] 代理响应格式异常，需为 LLM 原始 JSON 或 content 字符串',
       )
     }
+    return text
+  }
+
+  /** Chat Completions 的 content 可能是字符串，也可能是 `{ type, text }` 分段 */
+  private contentToText(content: unknown): string {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return ''
     return content
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
+          return (part as { text: string }).text
+        }
+        return ''
+      })
+      .join('')
   }
 
   /**
@@ -329,8 +345,6 @@ export class AISensitiveWordDetector {
         signal: controller.signal,
       })
 
-      clearTimeout(timer)
-
       if (!res.ok) {
         const errorBody = await res.text().catch(() => '')
         throw new Error(
@@ -339,21 +353,22 @@ export class AISensitiveWordDetector {
       }
 
       const data: unknown = await res.json()
-      const content = (data as { choices?: Array<{ message?: { content?: string } }> })
+      const content = (data as { choices?: Array<{ message?: { content?: unknown } }> })
         ?.choices?.[0]?.message?.content
-      if (!content) {
+      if (!this.contentToText(content)) {
         throw new Error(
           `[AISensitiveWordDetector] API 返回数据格式异常: ${JSON.stringify(data)}`
         )
       }
 
       return data
-    } catch (err: any) {
-      clearTimeout(timer)
-      if (err.name === 'AbortError') {
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
         throw new Error(`[AISensitiveWordDetector] 请求超时 (${this.config.timeout}ms)`)
       }
       throw err
+    } finally {
+      clearTimeout(timer)
     }
   }
 
@@ -386,43 +401,98 @@ export class AISensitiveWordDetector {
    * - 文本中某处包含 JSON 对象
    */
   private parseResponse(content: string): AIDetectResult {
-    // 尝试提取 markdown 代码块中的 JSON
-    const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/)
-    const candidate = codeBlockMatch ? codeBlockMatch[1].trim() : content.trim()
-
-    // 尝试从文本中提取 JSON 对象
-    const jsonMatch = candidate.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
+    const jsonText = this.extractJsonObject(content)
+    if (!jsonText) {
       throw new Error(
         `[AISensitiveWordDetector] 无法从 AI 返回中解析 JSON: ${content}`
       )
     }
 
-    let parsed: any
+    let parsed: Record<string, unknown>
     try {
-      parsed = JSON.parse(jsonMatch[0])
+      parsed = JSON.parse(jsonText) as Record<string, unknown>
     } catch {
       throw new Error(
-        `[AISensitiveWordDetector] JSON 解析失败: ${jsonMatch[0]}`
+        `[AISensitiveWordDetector] JSON 解析失败: ${jsonText}`
       )
     }
 
     const validCategories = ['politics', 'ads', 'porn', 'violence', 'cult', 'abuse']
     const validRiskLevels = ['low', 'medium', 'high']
+    const riskLevel = typeof parsed.riskLevel === 'string' ? parsed.riskLevel.toLowerCase() : ''
 
     return {
-      isSensitive: Boolean(parsed.isSensitive),
+      isSensitive: this.asBoolean(parsed.isSensitive),
       categories: Array.isArray(parsed.categories)
         ? parsed.categories.filter((c: string) => validCategories.includes(c))
         : [],
       matchedWords: this.normalizeMatchedWords(parsed.matchedWords),
-      riskLevel: validRiskLevels.includes(parsed.riskLevel)
-        ? parsed.riskLevel
+      riskLevel: (validRiskLevels as readonly string[]).includes(riskLevel)
+        ? (riskLevel as AIDetectResult['riskLevel'])
         : 'low',
       reason: typeof parsed.reason === 'string' ? parsed.reason : '',
-      confidence: typeof parsed.confidence === 'number'
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : 1,
+      confidence: this.asConfidence(parsed.confidence),
     }
+  }
+
+  /** 模型有时把布尔值写成字符串。"false" 不能再用 Boolean()，否则会变成 true。 */
+  private asBoolean(value: unknown): boolean {
+    if (typeof value === 'boolean') return value
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase()
+      if (normalized === 'true') return true
+      if (normalized === 'false') return false
+    }
+    return Boolean(value)
+  }
+
+  private asConfidence(value: unknown): number {
+    const numeric = typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : Number.NaN
+    if (!Number.isFinite(numeric)) return 1
+    return Math.max(0, Math.min(1, numeric))
+  }
+
+  /**
+   * 从模型输出中切出第一个平衡的 JSON 对象。
+   * 字符串里的括号和结尾多余的 `}` 不会把整个片段扩进去。
+   */
+  private extractJsonObject(content: string): string | null {
+    const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/)
+    const candidate = codeBlockMatch ? codeBlockMatch[1] : content
+    const start = candidate.indexOf('{')
+    if (start < 0) return null
+
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+          continue
+        }
+        if (ch === '\\') {
+          escaped = true
+          continue
+        }
+        if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') {
+        inString = true
+        continue
+      }
+      if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) return candidate.slice(start, i + 1)
+      }
+    }
+    return null
   }
 }

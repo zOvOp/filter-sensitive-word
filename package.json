@@ -1,6 +1,6 @@
 {
   "name": "filter-sensitive-word",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "轻量级敏感词检测与过滤库",
   "keywords": [
     "sensitive",
@@ -12,6 +12,7 @@
     "profanity",
     "profanity-filter",
     "content-moderation",
+    "moderation",
     "dfa",
     "trie",
     "chinese",
@@ -39,8 +40,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -52,7 +55,7 @@
     "node": ">=16"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist/index.d.cts', { force: true })\"",
     "dev": "tsup --watch",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",

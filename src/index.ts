@@ -53,6 +53,7 @@ interface FilterOptions {
   /**
    * 启用默认词库时，指定要检测的敏感词类型
    * 不传则启用全部类型：politics、ads、porn、violence、cult、abuse
+   * 传入空数组则不加载任何内置分类
    * @default ['politics', 'ads', 'porn', 'violence', 'cult', 'abuse']
    */
   detectTypes?: DetectType[]
@@ -103,6 +104,13 @@ export class FilterSensitiveWord {
   private root: TrieNode
   /** 干扰词字符集合，用于快速 O(1) 判断 */
   private noiseSet: Set<string>
+  /**
+   * 已登记的原文。key 是大小写折叠后的词，value 是首次写入的原文。
+   * `setNoiseWords` 会按当前干扰词重新归一化这些原文。
+   */
+  private vocabulary = new Map<string, string>()
+  /** 归一化词条的引用计数。两条原文可能落到同一条路径，删除一条时不能拆掉另一条。 */
+  private tokenRefs = new Map<string, number>()
 
   /**
    * 创建敏感词过滤器实例
@@ -110,7 +118,7 @@ export class FilterSensitiveWord {
    * @param options - 配置选项
    * @param options.words - 用户自定义追加的敏感词
    * @param options.useDefaultWords - 是否启用默认词库，默认 true
-   * @param options.detectTypes - 启用默认词库时指定检测类型，不传则全部启用
+   * @param options.detectTypes - 启用默认词库时指定检测类型，不传则全部启用；空数组表示不加载内置分类
    * @param options.noiseWords - 自定义干扰词字符集
    */
   constructor(options: FilterOptions = {}) {
@@ -122,12 +130,11 @@ export class FilterSensitiveWord {
     this.noiseSet = new Set(noiseWords ?? defaultNoiseWords)
 
     if (useDefaultWords) {
-      if (detectTypes && detectTypes.length > 0) {
-        // 根据指定类型按需加载词库
+      if (detectTypes) {
+        // 调用方显式传入的分类，空数组表示一个内置分类都不加载
         for (const type of detectTypes) {
-          if (detectTypeWordMap[type]) {
-            this.addWords(detectTypeWordMap[type])
-          }
+          const list = detectTypeWordMap[type]
+          if (list) this.addWords(list)
         }
       } else {
         // 未指定类型时加载全部默认词库
@@ -144,6 +151,11 @@ export class FilterSensitiveWord {
   /**
    * 批量添加敏感词到词库
    *
+   * 入库前会去掉干扰字符。去掉后仍至少有两个有效字符时，按这些字符建词，
+   * 因此词条里的空格和标点不会再让这个词永远匹配不到。
+   * 如果去掉干扰字符后只剩一个有效字符，则丢弃该词，避免被遮挡的词退化成单字。
+   * 本身就是单字、且不含干扰字符的词会保留。
+   *
    * @param words - 敏感词数组
    *
    * @example
@@ -154,7 +166,10 @@ export class FilterSensitiveWord {
   addWords(words: string[]): void {
     for (const word of words) {
       if (!word) continue
-      this.insert(word)
+      const { id, tokens } = this.classify(word)
+      if (this.vocabulary.has(id)) continue
+      this.vocabulary.set(id, word)
+      if (tokens) this.retain(tokens)
     }
   }
 
@@ -174,7 +189,10 @@ export class FilterSensitiveWord {
   removeWords(words: string[]): void {
     for (const word of words) {
       if (!word) continue
-      this.remove(word)
+      const { id, tokens } = this.classify(word)
+      if (!this.vocabulary.has(id)) continue
+      this.vocabulary.delete(id)
+      if (tokens) this.release(tokens)
     }
   }
 
@@ -186,6 +204,8 @@ export class FilterSensitiveWord {
    *
    * @param noiseWords - 干扰词字符串，每个字符为一个干扰词
    *
+   * 干扰词变化后会按新字符集重建词库，已添加的词会重新归一化。
+   *
    * @example
    * ```ts
    * filter.setNoiseWords(' \t!@#$%')
@@ -193,6 +213,7 @@ export class FilterSensitiveWord {
    */
   setNoiseWords(noiseWords: string): void {
     this.noiseSet = new Set(noiseWords)
+    this.rebuild()
   }
 
   /**
@@ -214,19 +235,16 @@ export class FilterSensitiveWord {
   hasSensitive(text: string): boolean {
     if (!text) return false
 
-    const len = text.length
-    // 外层循环：以每个非干扰词字符为起点尝试匹配
-    for (let i = 0; i < len; i++) {
-      if (this.noiseSet.has(text[i])) continue
+    const units = this.scan(text)
+    for (let i = 0; i < units.length; i++) {
+      if (units[i].noise) continue
       let node: TrieNode = this.root
-      // 内层循环：从起点向后逐字符在 Trie 树中前进
-      for (let j = i; j < len; j++) {
-        // 干扰词直接跳过，不参与 Trie 匹配
-        if (this.noiseSet.has(text[j])) continue
-        const child = node.children.get(text[j].toLowerCase())
-        if (!child) break // 当前字符不在 Trie 中，退出内层循环
+      for (let j = i; j < units.length; j++) {
+        if (units[j].noise) continue
+        const child = node.children.get(units[j].lower)
+        if (!child) break
         node = child
-        if (node.isEnd) return true // 找到完整敏感词，立即返回
+        if (node.isEnd) return true
       }
     }
     return false
@@ -244,7 +262,7 @@ export class FilterSensitiveWord {
    *
    * @example
    * ```ts
-   * filter.filter('这是兼职广告')            // '这是****'
+   * filter.filter('这是兼职广告')            // '这是**广告'
    * filter.filter('敏感词', '#')             // '###'
    * filter.filter('兼 职', '*')              // '***'，空格为干扰词也会被替换
    * ```
@@ -252,46 +270,38 @@ export class FilterSensitiveWord {
   filter(text: string, replacement: string = '*'): string {
     if (!text) return ''
 
-    // 收集所有匹配到的敏感词区间 [start, end)
+    const units = this.scan(text)
     const matches: Array<{ start: number; end: number }> = []
-    const len = text.length
 
-    for (let i = 0; i < len; i++) {
-      // 跳过干扰词起始位置
-      if (this.noiseSet.has(text[i])) continue
+    for (let i = 0; i < units.length; i++) {
+      if (units[i].noise) continue
       let node: TrieNode = this.root
-      let j = i
-      let lastMatchEnd = -1 // 记录当前起点下能匹配到的最远结束位置
-      while (j < len) {
-        if (this.noiseSet.has(text[j])) {
-          j++
-          continue
-        }
-        const child = node.children.get(text[j].toLowerCase())
+      let lastMatchEnd = -1
+      for (let j = i; j < units.length; j++) {
+        if (units[j].noise) continue
+        const child = node.children.get(units[j].lower)
         if (!child) break
         node = child
-        j++
-        if (node.isEnd) {
-          lastMatchEnd = j // 记录匹配终点，继续向后寻找更长匹配
-        }
+        if (node.isEnd) lastMatchEnd = units[j].end
       }
-      if (lastMatchEnd > 0) {
-        matches.push({ start: i, end: lastMatchEnd })
+      if (lastMatchEnd > units[i].index) {
+        matches.push({ start: units[i].index, end: lastMatchEnd })
       }
     }
 
-    // 合并重叠和相邻的匹配区间
     const merged = this.mergeMatches(matches)
     if (merged.length === 0) return text
 
-    // 用替换字符覆盖匹配区间内的所有字符（包括干扰词）
-    const chars = [...text]
+    // 按码点替换，避免 emoji 等补充平面字符把下标和字符数组错位
+    let out = ''
+    let cursor = 0
     for (const { start, end } of merged) {
-      for (let k = start; k < end; k++) {
-        chars[k] = replacement
-      }
+      out += text.slice(cursor, start)
+      out += this.mask(text.slice(start, end), replacement)
+      cursor = end
     }
-    return chars.join('')
+    out += text.slice(cursor)
+    return out
   }
 
   /**
@@ -309,62 +319,124 @@ export class FilterSensitiveWord {
   findAll(text: string): string[] {
     if (!text) return []
 
+    const units = this.scan(text)
     const result: string[] = []
-    const len = text.length
 
-    for (let i = 0; i < len; i++) {
-      if (this.noiseSet.has(text[i])) continue
+    for (let i = 0; i < units.length; i++) {
+      if (units[i].noise) continue
       let node: TrieNode = this.root
-      const matchedChars: string[] = [] // 当前路径上匹配到的所有字符（含干扰词）
-      let lastMatch: string | null = null // 当前路径上最近一次完整匹配（去干扰词）
-      for (let j = i; j < len; j++) {
-        // 干扰词保留在 matchedChars 中但跳过 Trie 匹配
-        if (this.noiseSet.has(text[j])) {
-          matchedChars.push(text[j])
-          continue
-        }
-        const child = node.children.get(text[j].toLowerCase())
+      const matchedChars: string[] = []
+      let lastMatch: string | null = null
+      for (let j = i; j < units.length; j++) {
+        if (units[j].noise) continue
+        const child = node.children.get(units[j].lower)
         if (!child) break
         node = child
-        matchedChars.push(text[j])
-        if (node.isEnd) {
-          // 找到完整匹配，过滤掉干扰词后记录
-          lastMatch = matchedChars.filter(c => !this.noiseSet.has(c)).join('')
-        }
+        matchedChars.push(units[j].char)
+        if (node.isEnd) lastMatch = matchedChars.join('')
       }
-      if (lastMatch) {
-        result.push(lastMatch)
-      }
+      if (lastMatch) result.push(lastMatch)
     }
 
     return result
   }
 
-  /**
-   * 向 Trie 树中插入一个敏感词（内部方法）
-   * 插入时统一转为小写以保证大小写不敏感匹配
-   */
-  private insert(word: string): void {
-    let node = this.root
-    for (const char of word.toLowerCase()) {
-      if (!node.children.has(char)) {
-        node.children.set(char, { children: new Map(), isEnd: false })
-      }
-      node = node.children.get(char)!
+  /** 把文本拆成码点，并标出干扰字符。lower 与入库时的 token 使用同一种折叠。 */
+  private scan(text: string): Array<{ char: string; lower: string; index: number; end: number; noise: boolean }> {
+    const units: Array<{ char: string; lower: string; index: number; end: number; noise: boolean }> = []
+    for (let i = 0; i < text.length; ) {
+      const codePoint = text.codePointAt(i)!
+      const char = String.fromCodePoint(codePoint)
+      const end = i + char.length
+      units.push({
+        char,
+        lower: char.toLowerCase(),
+        index: i,
+        end,
+        noise: this.noiseSet.has(char),
+      })
+      i = end
     }
-    node.isEnd = true // 标记单词结束
+    return units
+  }
+
+  /** 每个码点替换成一份 replacement，BMP 文本与按码元逐个替换的结果一致。 */
+  private mask(slice: string, replacement: string): string {
+    let count = 0
+    for (const _char of slice) count++
+    return replacement.repeat(count)
   }
 
   /**
-   * 从 Trie 树中删除一个敏感词（内部方法）
-   * 删除后若节点不再是词尾且没有子节点，则向上剪枝。
+   * 折叠大小写，并去掉干扰字符。
+   * 干扰字符被去掉后不足两个有效字符时不入库，避免遮挡词退化成单字。
    */
-  private remove(word: string): void {
-    const chars = [...word.toLowerCase()]
-    const path: TrieNode[] = [this.root]
+  private classify(word: string): { id: string; tokens: string[] | null } {
+    let id = ''
+    const significant: string[] = []
+    let droppedNoise = false
+    for (const char of word) {
+      const lower = char.toLowerCase()
+      id += lower
+      if (this.noiseSet.has(char)) {
+        droppedNoise = true
+        continue
+      }
+      significant.push(lower)
+    }
+    if (significant.length >= 2) return { id, tokens: significant }
+    if (significant.length === 1 && !droppedNoise) return { id, tokens: significant }
+    return { id, tokens: null }
+  }
 
-    for (const char of chars) {
-      const next = path[path.length - 1].children.get(char)
+  private tokenKey(tokens: string[]): string {
+    return JSON.stringify(tokens)
+  }
+
+  private retain(tokens: string[]): void {
+    const key = this.tokenKey(tokens)
+    const count = this.tokenRefs.get(key) ?? 0
+    this.tokenRefs.set(key, count + 1)
+    if (count === 0) this.insertTokens(tokens)
+  }
+
+  private release(tokens: string[]): void {
+    const key = this.tokenKey(tokens)
+    const count = this.tokenRefs.get(key) ?? 0
+    if (count <= 1) {
+      this.tokenRefs.delete(key)
+      this.removeTokens(tokens)
+      return
+    }
+    this.tokenRefs.set(key, count - 1)
+  }
+
+  private rebuild(): void {
+    this.root = { children: new Map(), isEnd: false }
+    this.tokenRefs.clear()
+    for (const word of this.vocabulary.values()) {
+      const { tokens } = this.classify(word)
+      if (tokens) this.retain(tokens)
+    }
+  }
+
+  private insertTokens(tokens: string[]): void {
+    let node = this.root
+    for (const token of tokens) {
+      let child = node.children.get(token)
+      if (!child) {
+        child = { children: new Map(), isEnd: false }
+        node.children.set(token, child)
+      }
+      node = child
+    }
+    node.isEnd = true
+  }
+
+  private removeTokens(tokens: string[]): void {
+    const path: TrieNode[] = [this.root]
+    for (const token of tokens) {
+      const next = path[path.length - 1].children.get(token)
       if (!next) return
       path.push(next)
     }
@@ -376,7 +448,7 @@ export class FilterSensitiveWord {
     for (let i = path.length - 1; i > 0; i--) {
       const node = path[i]
       if (node.isEnd || node.children.size > 0) break
-      path[i - 1].children.delete(chars[i - 1])
+      path[i - 1].children.delete(tokens[i - 1])
     }
   }
 

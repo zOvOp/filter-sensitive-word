@@ -95,6 +95,76 @@ describe('FilterSensitiveWord', () => {
     assert.deepEqual(prefixed.findAll('abcd'), ['ab'])
   })
 
+  it('does not load built-in categories when detectTypes is empty', () => {
+    const filter = new FilterSensitiveWord({ detectTypes: [], words: ['abc'] })
+
+    assert.equal(filter.hasSensitive('兼职'), false)
+    assert.equal(filter.hasSensitive('abc'), true)
+    assert.equal(new FilterSensitiveWord({ detectTypes: [] }).hasSensitive('兼职'), false)
+  })
+
+  it('strips noise inside words without collapsing a masked word into one character', () => {
+    const filter = customFilter(['a*b', 'ab', 'q*', 'x'])
+
+    assert.equal(filter.hasSensitive('ab'), true)
+    assert.equal(filter.hasSensitive('a*b'), true)
+    assert.deepEqual(filter.findAll('a*b'), ['ab'])
+    assert.equal(filter.hasSensitive('q'), false)
+    assert.equal(filter.hasSensitive('q*'), false)
+    assert.equal(filter.hasSensitive('x'), true)
+
+    filter.removeWords(['ab'])
+    assert.equal(filter.hasSensitive('ab'), true)
+    filter.removeWords(['A*B'])
+    assert.equal(filter.hasSensitive('ab'), false)
+    assert.equal(filter.hasSensitive('x'), true)
+  })
+
+  it('rebuilds the trie when the noise set changes', () => {
+    const filter = customFilter(['a*b'])
+
+    assert.equal(filter.hasSensitive('ab'), true)
+    filter.setNoiseWords('')
+    assert.equal(filter.hasSensitive('ab'), false)
+    assert.equal(filter.hasSensitive('a*b'), true)
+    assert.equal(filter.filter('a*b'), '***')
+
+    const masked = customFilter(['q*'])
+    assert.equal(masked.hasSensitive('q'), false)
+    masked.setNoiseWords('')
+    assert.equal(masked.hasSensitive('q*'), true)
+    assert.equal(masked.hasSensitive('q'), false)
+  })
+
+  it('filters by code point so a non-BMP character keeps its place', () => {
+    const filter = customFilter(['ab'])
+
+    assert.equal(filter.hasSensitive('😀ab'), true)
+    assert.equal(filter.filter('😀ab'), '😀**')
+    assert.deepEqual(filter.findAll('😀ab'), ['ab'])
+
+    const emoji = customFilter(['a😀b', 'İ'], '')
+    assert.equal(emoji.hasSensitive('a😀b'), true)
+    assert.equal(emoji.filter('a😀b'), '***')
+    assert.deepEqual(emoji.findAll('xa😀by'), ['a😀b'])
+    assert.equal(emoji.hasSensitive('İ'), true)
+    assert.equal(emoji.filter('İ'), '*')
+  })
+
+  it('matches built-in phrases that contain separators and keeps one-character words', () => {
+    const violence = new FilterSensitiveWord({ detectTypes: ['violence'] })
+    assert.equal(violence.hasSensitive('转让 猎枪'), true)
+    assert.equal(violence.hasSensitive('转让猎枪'), true)
+    assert.deepEqual(violence.findAll('转让 猎枪'), ['转让猎枪'])
+
+    const abuse = new FilterSensitiveWord({ detectTypes: ['abuse'] })
+    assert.equal(abuse.hasSensitive('傻'), false)
+    assert.equal(abuse.hasSensitive('傻×'), false)
+    assert.equal(abuse.hasSensitive('傻逼'), true)
+    assert.equal(abuse.hasSensitive('傻×逼'), true)
+    assert.equal(abuse.hasSensitive('屌'), true)
+  })
+
   it('loads the ads dictionary only when that detect type is enabled', () => {
     const ads = new FilterSensitiveWord({ detectTypes: ['ads'] })
     const custom = new FilterSensitiveWord({ useDefaultWords: false })
@@ -215,6 +285,57 @@ describe('AISensitiveWordDetector', () => {
 
     assert.deepEqual(results[2].matchedWords, ['甲', '乙'])
     assert.equal(results[2].reason, '历史格式')
+  })
+
+  it('parses string booleans, a braced reason, and numeric strings', async () => {
+    const ai = new AISensitiveWordDetector({
+      customFetch: {
+        fetch: async () =>
+          '说明 {"isSensitive":"false","categories":[],"matchedWords":[],"riskLevel":"LOW","reason":"因为 } 在字符串里","confidence":"0.25"} 尾部 }',
+      },
+    })
+
+    const result = (await ai.detect('待检测')) as AIDetectResult
+    assert.equal(result.isSensitive, false)
+    assert.equal(result.riskLevel, 'low')
+    assert.equal(result.reason, '因为 } 在字符串里')
+    assert.equal(result.confidence, 0.25)
+  })
+
+  it('reads array content from a direct chat completion and strips a trailing baseURL slash', async () => {
+    const original = globalThis.fetch
+    const calls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input))
+      const body = JSON.stringify({
+        isSensitive: true,
+        categories: ['ads'],
+        matchedWords: ['词'],
+        riskLevel: 'high',
+        reason: '分段',
+        confidence: 2,
+      })
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: [{ type: 'text', text: body }] } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof fetch
+
+    try {
+      const ai = new AISensitiveWordDetector({
+        apiKey: 'sk-test',
+        baseURL: 'https://example.test/v1/',
+      })
+      const result = (await ai.detect('hello')) as AIDetectResult
+      assert.equal(calls[0], 'https://example.test/v1/chat/completions')
+      assert.equal(result.isSensitive, true)
+      assert.deepEqual(result.matchedWords, ['词'])
+      assert.equal(result.confidence, 1)
+    } finally {
+      globalThis.fetch = original
+    }
   })
 
   it('returns the raw response when a custom system prompt is set', async () => {
